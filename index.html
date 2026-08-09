@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="日本全国の場所を検索し、BFS・ダイクストラ法・A*探索を実際の道路データ上で動かして比べられる最短経路探索教材です。"
+    />
+    <meta name="theme-color" content="#07141f" />
+    <title>ナビ最短経路ラボ</title>
+    <link rel="stylesheet" href="./styles.css?v=9" />
+  </head>
+  <body>
+    <main class="lab-shell" aria-label="ナビ最短経路ラボ">
+      <section class="map-stage" aria-label="道路グラフ">
+        <canvas
+          id="map-canvas"
+          tabindex="0"
+          role="img"
+          aria-label="選んだ地域の道路グラフ。地点検索または地図上の道路クリックで、スタートとゴールを変更できます。"
+        ></canvas>
+
+        <div class="route-chip" aria-live="polite">
+          <span class="route-chip__point route-chip__point--start" aria-hidden="true"></span>
+          <span id="route-chip-start">鹿児島中央駅</span>
+          <span class="route-chip__arrow" aria-hidden="true">→</span>
+          <span class="route-chip__point route-chip__point--goal" aria-hidden="true"></span>
+          <span id="route-chip-goal">天文館</span>
+        </div>
+
+        <div id="selection-hint" class="selection-hint" hidden>
+          <span class="selection-hint__icon" aria-hidden="true">＋</span>
+          <span id="selection-hint-text">道路上をクリック</span>
+          <button id="cancel-selection" type="button">キャンセル</button>
+        </div>
+
+        <div class="compass" aria-hidden="true">
+          <span class="compass__needle"></span>
+          <span>N</span>
+        </div>
+
+        <a
+          class="attribution"
+          href="https://www.openstreetmap.org/copyright"
+          target="_blank"
+          rel="noreferrer"
+        >
+          道路データ © OpenStreetMap contributors
+        </a>
+
+        <div id="loading-panel" class="loading-panel" role="status">
+          <span class="loading-panel__spinner" aria-hidden="true"></span>
+          <strong>道路データを準備しています</strong>
+          <span>鹿児島中央駅〜天文館周辺</span>
+        </div>
+      </section>
+
+      <aside class="control-panel">
+        <header class="algorithm-heading">
+          <p class="eyebrow">NAVIGATION ALGORITHM LAB</p>
+          <div class="algorithm-heading__title">
+            <h1 id="algorithm-name">BFS</h1>
+            <span id="algorithm-name-ja">幅優先探索</span>
+          </div>
+          <p id="algorithm-tagline" class="tagline">近い「段数」から、波紋のように調べる</p>
+        </header>
+
+        <fieldset class="algorithm-picker" disabled>
+          <legend>探索方法を選ぶ</legend>
+          <div class="segmented-control">
+            <button class="algorithm-button is-active" type="button" data-algorithm="bfs" aria-pressed="true">
+              <span>BFS</span>
+              <small>区間数</small>
+            </button>
+            <button class="algorithm-button" type="button" data-algorithm="dijkstra" aria-pressed="false">
+              <span>ダイクストラ</span>
+              <small>実距離</small>
+            </button>
+            <button class="algorithm-button" type="button" data-algorithm="astar" aria-pressed="false">
+              <span>A*</span>
+              <small>距離＋予想</small>
+            </button>
+          </div>
+        </fieldset>
+
+        <section class="rule-card" aria-labelledby="rule-card-title">
+          <span id="rule-card-title">選ぶルール</span>
+          <strong id="algorithm-equation">優先度 ＝ 通った区間数</strong>
+        </section>
+
+        <section class="location-panel" aria-labelledby="location-title">
+          <div class="section-heading-row">
+            <h2 id="location-title">ルートを決める</h2>
+            <button id="swap-locations" class="text-button" type="button" disabled>入れ替え</button>
+          </div>
+
+          <div class="location-row">
+            <span class="location-marker location-marker--start" aria-hidden="true">S</span>
+            <span class="location-copy">
+              <small>スタート</small>
+              <strong id="start-label">鹿児島中央駅</strong>
+              <span id="start-coordinate">31.58367, 130.54172</span>
+            </span>
+            <button id="pick-start" class="pick-button" type="button" disabled>検索</button>
+          </div>
+
+          <div class="location-connector" aria-hidden="true"></div>
+
+          <div class="location-row">
+            <span class="location-marker location-marker--goal" aria-hidden="true">G</span>
+            <span class="location-copy">
+              <small>ゴール</small>
+              <strong id="goal-label">天文館</strong>
+              <span id="goal-coordinate">31.59055, 130.55418</span>
+            </span>
+            <button id="pick-goal" class="pick-button" type="button" disabled>検索</button>
+          </div>
+
+          <button id="restore-defaults" class="restore-button" type="button" disabled>
+            鹿児島中央駅 → 天文館に戻す
+          </button>
+
+          <section id="place-search-panel" class="place-search-panel" aria-labelledby="place-search-title" hidden>
+            <div class="place-search-panel__heading">
+              <div>
+                <span>日本全国から探す</span>
+                <h3 id="place-search-title">スタートを検索</h3>
+              </div>
+              <button id="close-place-search" type="button" aria-label="場所検索を閉じる">×</button>
+            </div>
+
+            <form id="place-search-form" class="place-search-form" role="search">
+              <label class="sr-only" for="place-search-input">駅・住所・施設名</label>
+              <input
+                id="place-search-input"
+                name="place"
+                type="search"
+                placeholder="例：東京駅、札幌時計台"
+                autocomplete="off"
+                enterkeyhint="search"
+                required
+              />
+              <button id="place-search-submit" type="submit">検索</button>
+            </form>
+
+            <div class="nearby-category-row" aria-label="現在の地図周辺から探す">
+              <span>地図周辺</span>
+              <button type="button" data-nearby-category="convenience">コンビニ</button>
+              <button type="button" data-nearby-category="elementary_school">小学校</button>
+              <button type="button" data-nearby-category="junior_high_school">中学校</button>
+              <button type="button" data-nearby-category="high_school">高校</button>
+              <button type="button" data-nearby-category="university">大学</button>
+              <button type="button" data-nearby-category="supermarket">スーパー</button>
+              <button type="button" data-nearby-category="restaurant">レストラン</button>
+              <button type="button" data-nearby-category="bento">弁当店</button>
+              <button type="button" data-nearby-category="cafe">カフェ</button>
+              <button type="button" data-nearby-category="pharmacy">薬局</button>
+              <button type="button" data-nearby-category="medical">病院</button>
+              <button type="button" data-nearby-category="park">公園</button>
+              <button type="button" data-nearby-category="library">図書館</button>
+              <button type="button" data-nearby-category="station">駅</button>
+            </div>
+
+            <p class="place-search-panel__guide">
+              固有名詞は日本全国から検索できます。ゴール検索の施設カテゴリは、設定したスタート地点の周辺から近い順に探します。2地点は直線距離6 km以内で選べます。個人情報は入力しないでください。
+            </p>
+            <p id="place-search-status" class="place-search-status" aria-live="polite"></p>
+            <ul id="place-search-results" class="place-search-results" aria-label="場所の検索結果"></ul>
+
+            <button id="pick-from-current-map" class="map-pick-link" type="button">
+              または、いま表示中の地図から選ぶ
+            </button>
+            <p class="place-search-panel__credit">
+              検索結果 © OpenStreetMap contributors / Nominatim
+            </p>
+          </section>
+        </section>
+
+        <div class="playback-row">
+          <label class="speed-picker" for="speed-select">
+            <span>再生速度</span>
+            <select id="speed-select" disabled>
+              <option value="0.6">ゆっくり</option>
+              <option value="1" selected>ふつう</option>
+              <option value="1.8">速い</option>
+            </select>
+          </label>
+          <div class="playback-actions">
+            <button id="primary-action" class="primary-action" type="button" disabled>
+              <span class="primary-action__icon" aria-hidden="true">▶</span>
+              <span id="primary-action-label">探索を開始</span>
+            </button>
+            <button
+              id="stop-action"
+              class="stop-action"
+              type="button"
+              aria-label="探索を中止して準備完了に戻る"
+              hidden
+              disabled
+            >
+              <span aria-hidden="true">■</span>
+              <span>探索を中止</span>
+            </button>
+          </div>
+        </div>
+
+        <section class="progress-section" aria-live="polite">
+          <div class="progress-section__label">
+            <strong id="phase-label">準備中</strong>
+            <span id="phase-detail">道路データを読み込んでいます</span>
+          </div>
+          <div
+            id="progress-track"
+            class="progress-track"
+            role="progressbar"
+            aria-label="探索の進み具合"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+          >
+            <span id="progress-fill"></span>
+          </div>
+        </section>
+
+        <section class="metrics-grid" aria-label="探索結果">
+          <article class="metric-card">
+            <span>探索済み地点</span>
+            <strong id="metric-settled">—</strong>
+          </article>
+          <article class="metric-card">
+            <span>探索計算</span>
+            <strong id="metric-time">—</strong>
+          </article>
+          <article class="metric-card">
+            <span>現在の評価</span>
+            <strong id="metric-current">—</strong>
+          </article>
+          <article class="metric-card metric-card--route">
+            <span>決定ルート</span>
+            <strong id="metric-route">—</strong>
+          </article>
+        </section>
+
+        <section class="explanation-card" aria-labelledby="explanation-title">
+          <span id="explanation-title">いま何をしている？</span>
+          <p id="explanation-text">
+            探索方法と2地点を選んで「探索を開始」を押してください。
+          </p>
+        </section>
+
+        <div class="legend" aria-label="地図の凡例">
+          <span><i class="legend__line legend__line--railway"></i>線路</span>
+          <span><i class="legend__station"></i>駅</span>
+          <span><i class="legend__line legend__line--explored"></i>調べた道</span>
+          <span><i class="legend__line legend__line--route"></i>決定ルート</span>
+        </div>
+
+        <p class="safety-note">アルゴリズム学習用です。実際の移動には公式の交通情報やナビを確認してください。</p>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+    <script src="./app-config.js?v=9" defer></script>
+    <script src="./route-core.js?v=9" defer></script>
+    <script src="./app.js?v=9" defer></script>
+  </body>
+</html>

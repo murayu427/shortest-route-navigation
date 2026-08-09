@@ -1,0 +1,53 @@
+{
+  "start": {
+    "label": "隼人駅",
+    "lat": 31.7439369,
+    "lon": 130.7401732
+  },
+  "goal": {
+    "label": "鹿児島高専",
+    "lat": 31.731315,
+    "lon": 130.7276633
+  },
+  "graph": {
+    "raw_nodes": 3708,
+    "raw_segments": 4078,
+    "graph_nodes": 1226,
+    "graph_edges": 1592,
+    "start_snap_m": 18.2,
+    "goal_snap_m": 61.4
+  },
+  "results": {
+    "bfs": {
+      "algorithm_ja": "幅優先探索",
+      "output": "01_bfs_hayato_to_kosen.gif",
+      "screenshot": "01_bfs_hayato_to_kosen_found.png",
+      "distance_m": 2094.9,
+      "road_segments": 20,
+      "settled_nodes": 774,
+      "search_events": 774,
+      "calculation_time_ms": 1.3916
+    },
+    "dijkstra": {
+      "algorithm_ja": "ダイクストラ法",
+      "output": "02_dijkstra_hayato_to_kosen.gif",
+      "screenshot": "02_dijkstra_hayato_to_kosen_found.png",
+      "distance_m": 2058.2,
+      "road_segments": 23,
+      "settled_nodes": 985,
+      "search_events": 985,
+      "calculation_time_ms": 5.5589
+    },
+    "astar": {
+      "algorithm_ja": "A* 探索",
+      "output": "03_astar_hayato_to_kosen.gif",
+      "screenshot": "03_astar_hayato_to_kosen_found.png",
+      "distance_m": 2058.2,
+      "road_segments": 23,
+      "settled_nodes": 179,
+      "search_events": 179,
+      "calculation_time_ms": 1.6936
+    }
+  },
+  "attribution": "Road data © OpenStreetMap contributors, ODbL 1.0"
+}
