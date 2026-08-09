@@ -112,6 +112,8 @@
     placeSearchInput: document.querySelector("#place-search-input"),
     placeSearchSubmit: document.querySelector("#place-search-submit"),
     placeSearchStatus: document.querySelector("#place-search-status"),
+    placeSearchLoading: document.querySelector("#place-search-loading"),
+    placeSearchLoadingDetail: document.querySelector("#place-search-loading-detail"),
     placeSearchResults: document.querySelector("#place-search-results"),
     nearbyCategoryButtons: Array.from(document.querySelectorAll("[data-nearby-category]")),
     closePlaceSearch: document.querySelector("#close-place-search"),
@@ -129,6 +131,8 @@
     metricTime: document.querySelector("#metric-time"),
     metricCurrent: document.querySelector("#metric-current"),
     metricRoute: document.querySelector("#metric-route"),
+    downloadGif: document.querySelector("#download-gif"),
+    downloadGifLabel: document.querySelector("#download-gif-label"),
     explanationText: document.querySelector("#explanation-text"),
     toast: document.querySelector("#toast"),
   };
@@ -162,6 +166,7 @@
     networkLoading: false,
     loadingDetail: "道路データを読み込んでいます",
     geocodeController: null,
+    placeSearchBusy: false,
     poiRetryPromise: null,
     lastGeocodeAt: 0,
     roadMemoryCache: new Map(),
@@ -177,6 +182,7 @@
     canvasHeight: 0,
     dpr: 1,
     projection: null,
+    gifGenerating: false,
     toastTimer: null,
   };
 
@@ -844,17 +850,18 @@
 
   function updateControls() {
     const exploring = state.phase === "search" || state.phase === "route";
-    const busy = exploring || state.networkLoading;
+    const busy = exploring || state.networkLoading || state.gifGenerating;
     elements.algorithmPicker.disabled = !state.loaded || busy;
     elements.pickStart.disabled = !state.loaded || busy;
     elements.pickGoal.disabled = !state.loaded || busy;
     elements.swapLocations.disabled = !state.loaded || busy;
     elements.restoreDefaults.disabled = !state.loaded || busy;
-    elements.speedSelect.disabled = !state.loaded;
+    elements.speedSelect.disabled = !state.loaded || state.gifGenerating;
     elements.primaryAction.disabled =
-      !state.loaded || busy && state.networkLoading || state.startId === state.goalId;
+      !state.loaded || state.networkLoading || state.gifGenerating || state.startId === state.goalId;
     elements.stopAction.hidden = !exploring;
     elements.stopAction.disabled = !exploring;
+    elements.downloadGif.disabled = state.phase !== "done" || !state.result || state.gifGenerating;
   }
 
   function showLoadingOverlay(titleText, detailText) {
@@ -1453,9 +1460,231 @@
     showToast("探索を中止しました。スタートとゴールはそのままです。");
   }
 
+  function fitCanvasText(context, value, maxWidth) {
+    const text = String(value);
+    if (context.measureText(text).width <= maxWidth) return text;
+    let shortened = text;
+    while (shortened.length > 1 && context.measureText(`${shortened}…`).width > maxWidth) {
+      shortened = shortened.slice(0, -1);
+    }
+    return `${shortened}…`;
+  }
+
+  function createGifExportSurface() {
+    const width = 640;
+    const headerHeight = 64;
+    const footerHeight = 40;
+    const sourceWidth = Math.max(1, state.canvasWidth);
+    const sourceHeight = Math.max(1, state.canvasHeight);
+    const scale = Math.min(width / sourceWidth, 480 / sourceHeight);
+    const mapWidth = Math.max(1, Math.round(sourceWidth * scale));
+    const mapHeight = Math.max(1, Math.round(sourceHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = headerHeight + mapHeight + footerHeight;
+    return {
+      canvas,
+      context: canvas.getContext("2d", { willReadFrequently: true }),
+      headerHeight,
+      footerHeight,
+      mapWidth,
+      mapHeight,
+      mapX: Math.round((width - mapWidth) / 2),
+    };
+  }
+
+  function composeGifFrame(surface, statusText) {
+    const { canvas, context, headerHeight, footerHeight, mapWidth, mapHeight, mapX } = surface;
+    const config = ALGORITHMS[state.algorithm];
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.fillStyle = COLORS.map;
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(
+      elements.canvas,
+      0,
+      0,
+      elements.canvas.width,
+      elements.canvas.height,
+      mapX,
+      headerHeight,
+      mapWidth,
+      mapHeight,
+    );
+
+    context.fillStyle = COLORS.panel;
+    context.fillRect(0, 0, canvas.width, headerHeight);
+    context.fillRect(0, headerHeight + mapHeight, canvas.width, footerHeight);
+    context.fillStyle = config.accent;
+    context.fillRect(0, 0, 6, headerHeight);
+
+    context.textBaseline = "middle";
+    context.textAlign = "left";
+    context.fillStyle = COLORS.text;
+    context.font = "800 19px 'BIZ UDPGothic', 'Yu Gothic UI', sans-serif";
+    context.fillText(`最短経路探索｜${config.name}`, 20, 23);
+    context.fillStyle = COLORS.muted;
+    context.font = "600 13px 'BIZ UDPGothic', 'Yu Gothic UI', sans-serif";
+    context.fillText(
+      fitCanvasText(context, `${state.startLabel} → ${state.goalLabel}`, canvas.width - 40),
+      20,
+      47,
+    );
+
+    const footerY = headerHeight + mapHeight + footerHeight / 2;
+    context.fillStyle = state.phase === "done" ? COLORS.route : config.accent;
+    context.font = "800 12px 'BIZ UDPGothic', 'Yu Gothic UI', sans-serif";
+    context.fillText(fitCanvasText(context, statusText, canvas.width - 180), 20, footerY);
+    context.textAlign = "right";
+    context.fillStyle = COLORS.muted;
+    context.font = "700 11px 'BIZ UDPGothic', 'Yu Gothic UI', sans-serif";
+    context.fillText("ナビ最短経路ラボ", canvas.width - 18, footerY);
+  }
+
+  function safeGifFilePart(value) {
+    return String(value)
+      .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
+      .replace(/[\s　]+/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_|_$/g, "")
+      .slice(0, 32) || "point";
+  }
+
+  function triggerGifDownload(blob) {
+    const filename = [
+      state.algorithm,
+      safeGifFilePart(state.startLabel),
+      "to",
+      safeGifFilePart(state.goalLabel),
+    ].join("_");
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${filename}.gif`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  }
+
+  async function downloadResultGif() {
+    if (state.phase !== "done" || !state.result || state.gifGenerating) return;
+    const GifEncoder = window.RouteGifEncoder?.GifEncoder;
+    if (!GifEncoder) {
+      showToast("GIF作成機能を読み込めませんでした。ページを再読み込みしてください。");
+      return;
+    }
+
+    const previous = {
+      phase: state.phase,
+      paused: state.paused,
+      currentEvent: state.currentEvent,
+      exploredEdges: new Set(state.exploredEdges),
+      eventCursor: state.eventCursor,
+      eventBudget: state.eventBudget,
+      routeProgress: state.routeProgress,
+      lastFrameTime: state.lastFrameTime,
+    };
+    state.gifGenerating = true;
+    elements.downloadGif.setAttribute("aria-busy", "true");
+    elements.downloadGifLabel.textContent = "GIFを準備中…";
+    updateControls();
+    showToast("探索アニメーションのGIFを作成しています。");
+
+    try {
+      const surface = createGifExportSurface();
+      const encoder = new GifEncoder(surface.canvas.width, surface.canvas.height, { loop: 0 });
+      const events = state.result.events;
+      const searchFrameCount = Math.min(24, Math.max(12, Math.ceil(Math.sqrt(Math.max(1, events.length)))));
+      const routeFrameCount = 10;
+      const totalFrames = searchFrameCount + routeFrameCount + 2;
+      let encodedFrames = 0;
+
+      const addFrame = (statusText, delay) => {
+        render();
+        composeGifFrame(surface, statusText);
+        const rgba = surface.context.getImageData(0, 0, surface.canvas.width, surface.canvas.height).data;
+        encoder.addFrame(rgba, delay);
+        encodedFrames += 1;
+        const progress = Math.min(99, Math.round((encodedFrames / totalFrames) * 100));
+        elements.downloadGifLabel.textContent = `GIF作成中 ${progress}%`;
+      };
+
+      state.phase = "search";
+      state.paused = false;
+      state.currentEvent = null;
+      state.exploredEdges = new Set();
+      state.eventCursor = 0;
+      state.eventBudget = 0;
+      state.routeProgress = 0;
+      addFrame("探索を開始", 35);
+
+      let appliedEventCount = 0;
+      for (let frame = 1; frame <= searchFrameCount; frame += 1) {
+        const targetEventCount = Math.ceil((events.length * frame) / searchFrameCount);
+        while (appliedEventCount < targetEventCount) {
+          const event = events[appliedEventCount];
+          for (const edgeId of event.examinedEdges) state.exploredEdges.add(edgeId);
+          state.currentEvent = event;
+          appliedEventCount += 1;
+        }
+        state.eventCursor = appliedEventCount;
+        const percent = Math.round((appliedEventCount / Math.max(1, events.length)) * 100);
+        const settled = state.currentEvent?.settledCount || 0;
+        addFrame(`探索中 ${percent}%｜${settled.toLocaleString("ja-JP")}地点を確認`, 10);
+        if (frame % 4 === 0) await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+
+      state.phase = "route";
+      state.currentEvent = events[events.length - 1] || null;
+      for (let frame = 1; frame <= routeFrameCount; frame += 1) {
+        state.routeProgress = frame / routeFrameCount;
+        addFrame(`最短ルートを復元 ${Math.round(state.routeProgress * 100)}%`, 10);
+        if (frame % 4 === 0) await new Promise((resolve) => window.setTimeout(resolve, 0));
+      }
+
+      state.phase = "done";
+      state.routeProgress = 1;
+      addFrame(`ルート確定｜${formatDistance(state.result.distanceM)}・${state.result.hops}区間`, 120);
+      elements.downloadGifLabel.textContent = "ダウンロードを開始…";
+      triggerGifDownload(encoder.finish());
+      showToast("探索結果のGIFを保存しました。");
+    } catch (error) {
+      console.error(error);
+      showToast("GIFを作成できませんでした。もう一度お試しください。");
+    } finally {
+      state.phase = previous.phase;
+      state.paused = previous.paused;
+      state.currentEvent = previous.currentEvent;
+      state.exploredEdges = previous.exploredEdges;
+      state.eventCursor = previous.eventCursor;
+      state.eventBudget = previous.eventBudget;
+      state.routeProgress = previous.routeProgress;
+      state.lastFrameTime = previous.lastFrameTime;
+      state.gifGenerating = false;
+      elements.downloadGif.removeAttribute("aria-busy");
+      elements.downloadGifLabel.textContent = "探索結果をGIFで保存";
+      updateControls();
+      updatePanel();
+      render();
+    }
+  }
+
   function setPlaceSearchStatus(message, isError = false) {
     elements.placeSearchStatus.textContent = message;
     elements.placeSearchStatus.classList.toggle("is-error", isError);
+  }
+
+  function setPlaceSearchBusy(isBusy, detail = "日本国内から候補を探しています") {
+    state.placeSearchBusy = isBusy;
+    elements.placeSearchPanel.setAttribute("aria-busy", String(isBusy));
+    elements.placeSearchLoading.hidden = !isBusy;
+    elements.placeSearchLoadingDetail.textContent = detail;
+    elements.placeSearchInput.disabled = isBusy;
+    elements.placeSearchSubmit.disabled = isBusy;
+    elements.placeSearchSubmit.textContent = isBusy ? "検索中" : "検索";
+    elements.nearbyCategoryButtons.forEach((button) => {
+      button.disabled = isBusy;
+    });
   }
 
   function openPlaceSearch(mode, preserveDraft = false, message = "") {
@@ -1470,6 +1699,7 @@
     elements.placeSearchTitle.textContent = mode === "start" ? "スタートを検索" : "ゴールを検索";
     elements.placeSearchInput.value = "";
     elements.placeSearchResults.replaceChildren();
+    setPlaceSearchBusy(false);
     setPlaceSearchStatus(message);
     elements.pickStart.classList.toggle("is-active", mode === "start");
     elements.pickGoal.classList.toggle("is-active", mode === "goal");
@@ -1479,6 +1709,7 @@
   function closePlaceSearch(revertDraft = true) {
     if (state.geocodeController) state.geocodeController.abort();
     state.geocodeController = null;
+    setPlaceSearchBusy(false);
     state.placeSearchMode = null;
     elements.placeSearchPanel.hidden = true;
     elements.placeSearchResults.replaceChildren();
@@ -1675,38 +1906,38 @@
   async function showNearbyCategory(category) {
     if (state.geocodeController) state.geocodeController.abort();
     state.geocodeController = null;
-    elements.placeSearchSubmit.disabled = false;
     const label = NEARBY_CATEGORIES[category]?.label || "施設";
     const origin = nearbySearchOrigin();
     elements.placeSearchInput.value = label;
-    let refreshFailed = false;
-    if (state.rawRoadData?._route_gif_metadata?.poiIncomplete) {
-      setPlaceSearchStatus("施設データだけを小さな範囲に分けて再取得しています…");
-      elements.nearbyCategoryButtons.forEach((button) => {
-        button.disabled = true;
-      });
-      try {
-        await refreshIncompleteNearbyFeatures();
-      } catch {
-        refreshFailed = true;
-      } finally {
-        elements.nearbyCategoryButtons.forEach((button) => {
-          button.disabled = false;
-        });
+    setPlaceSearchBusy(true, `${origin.originLabel}周辺の${label}を探しています`);
+    setPlaceSearchStatus(`${label}を検索しています…`);
+    elements.placeSearchResults.replaceChildren();
+
+    try {
+      let refreshFailed = false;
+      if (state.rawRoadData?._route_gif_metadata?.poiIncomplete) {
+        setPlaceSearchStatus("施設データだけを小さな範囲に分けて再取得しています…");
+        try {
+          await refreshIncompleteNearbyFeatures();
+        } catch {
+          refreshFailed = true;
+        }
       }
+      const results = localCategoryResults(category);
+      if (results.length === 0) {
+        elements.placeSearchResults.replaceChildren();
+        setPlaceSearchStatus(
+          refreshFailed
+            ? `道路は利用できますが、${label}データの取得だけ混雑のため完了しませんでした。もう一度お試しください。`
+            : `${origin.originLabel}周辺に${label}が見つかりませんでした。`,
+          true,
+        );
+        return;
+      }
+      renderPlaceResults(results);
+    } finally {
+      setPlaceSearchBusy(false);
     }
-    const results = localCategoryResults(category);
-    if (results.length === 0) {
-      elements.placeSearchResults.replaceChildren();
-      setPlaceSearchStatus(
-        refreshFailed
-          ? `道路は利用できますが、${label}データの取得だけ混雑のため完了しませんでした。もう一度お試しください。`
-          : `${origin.originLabel}周辺に${label}が見つかりませんでした。`,
-        true,
-      );
-      return;
-    }
-    renderPlaceResults(results);
   }
 
   function renderPlaceResults(results) {
@@ -1754,7 +1985,7 @@
       setPlaceSearchStatus("2文字以上で入力してください。", true);
       return;
     }
-    elements.placeSearchSubmit.disabled = true;
+    setPlaceSearchBusy(true, `「${query}」を日本国内から探しています`);
     setPlaceSearchStatus("日本国内から検索しています…");
     elements.placeSearchResults.replaceChildren();
     try {
@@ -1770,7 +2001,7 @@
         setPlaceSearchStatus("場所を検索できませんでした。少し待ってから再度お試しください。", true);
       }
     } finally {
-      elements.placeSearchSubmit.disabled = false;
+      setPlaceSearchBusy(false);
       state.geocodeController = null;
     }
   }
@@ -1994,6 +2225,9 @@
       else startSearch();
     });
     elements.stopAction.addEventListener("click", stopSearch);
+    elements.downloadGif.addEventListener("click", () => {
+      void downloadResultGif();
+    });
     elements.canvas.addEventListener("keydown", (event) => {
       if (event.key === "Escape") cancelSelectionAndRestore();
     });

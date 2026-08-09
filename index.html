@@ -9,7 +9,7 @@
     />
     <meta name="theme-color" content="#07141f" />
     <title>ナビ最短経路ラボ</title>
-    <link rel="stylesheet" href="./styles.css?v=9" />
+    <link rel="stylesheet" href="./styles.css?v=10" />
   </head>
   <body>
     <main class="lab-shell" aria-label="ナビ最短経路ラボ">
@@ -166,6 +166,13 @@
               固有名詞は日本全国から検索できます。ゴール検索の施設カテゴリは、設定したスタート地点の周辺から近い順に探します。2地点は直線距離6 km以内で選べます。個人情報は入力しないでください。
             </p>
             <p id="place-search-status" class="place-search-status" aria-live="polite"></p>
+            <div id="place-search-loading" class="place-search-loading" role="status" aria-live="polite" hidden>
+              <span class="place-search-loading__spinner" aria-hidden="true"></span>
+              <span>
+                <strong>検索中です</strong>
+                <small id="place-search-loading-detail">日本国内から候補を探しています</small>
+              </span>
+            </div>
             <ul id="place-search-results" class="place-search-results" aria-label="場所の検索結果"></ul>
 
             <button id="pick-from-current-map" class="map-pick-link" type="button">
@@ -242,6 +249,11 @@
           </article>
         </section>
 
+        <button id="download-gif" class="result-download" type="button" disabled>
+          <span class="result-download__icon" aria-hidden="true">↓</span>
+          <span id="download-gif-label">探索結果をGIFで保存</span>
+        </button>
+
         <section class="explanation-card" aria-labelledby="explanation-title">
           <span id="explanation-title">いま何をしている？</span>
           <p id="explanation-text">
@@ -262,8 +274,9 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
-    <script src="./app-config.js?v=9" defer></script>
-    <script src="./route-core.js?v=9" defer></script>
-    <script src="./app.js?v=9" defer></script>
+    <script src="./app-config.js?v=10" defer></script>
+    <script src="./route-core.js?v=10" defer></script>
+    <script src="./gif-encoder.js?v=10" defer></script>
+    <script src="./app.js?v=10" defer></script>
   </body>
 </html>
