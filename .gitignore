@@ -3,3 +3,16 @@ __pycache__/
 .DS_Store
 Thumbs.db
 
+# ローカルの発表・GIF生成用資料（公開リポジトリへ含めない）
+/01_bfs_hayato_to_kosen.gif
+/01_bfs_hayato_to_kosen_found.png
+/02_dijkstra_hayato_to_kosen.gif
+/02_dijkstra_hayato_to_kosen_found.png
+/03_astar_hayato_to_kosen.gif
+/03_astar_hayato_to_kosen_found.png
+/発表用解説.md
+/route_gif.py
+/route_metrics.json
+/requirements.txt
+/fetch_osm_data.py
+/data/hayato_walking_roads.json
