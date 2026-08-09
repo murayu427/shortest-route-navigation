@@ -593,6 +593,10 @@ select:disabled {
   font-size: 14px;
 }
 
+.place-search-panel__heading h3.is-map-loading {
+  color: var(--accent);
+}
+
 .place-search-panel__heading > button {
   display: grid;
   width: 28px;

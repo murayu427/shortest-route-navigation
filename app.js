@@ -1302,6 +1302,7 @@
     state.networkLoading = true;
     state.phase = "loading";
     state.loadingDetail = `${startPlace.label}〜${goalPlace.label}周辺`;
+    setPlaceSearchMapLoading(true);
     updateControls();
     updatePanel();
     showLoadingOverlay("周辺の道路を準備しています", state.loadingDetail);
@@ -1316,6 +1317,7 @@
     } catch (error) {
       state.networkLoading = false;
       state.phase = state.loaded ? "ready" : "loading";
+      setPlaceSearchMapLoading(false);
       updateControls();
       updatePanel();
       if (state.loaded) {
@@ -1332,6 +1334,7 @@
     state.animationId = null;
     state.networkLoading = true;
     state.loadingDetail = `${anchor.label}周辺`;
+    setPlaceSearchMapLoading(true);
     updateControls();
     showLoadingOverlay("選んだ地点周辺の地図を準備しています", state.loadingDetail);
 
@@ -1340,11 +1343,13 @@
       if (!raw) raw = await fetchRoadData(anchor, anchor);
       applySearchPreview(raw, anchor, targetMode);
       state.networkLoading = false;
+      setPlaceSearchMapLoading(false);
       updateControls();
       updatePanel();
       hideLoadingOverlay();
     } catch (error) {
       state.networkLoading = false;
+      setPlaceSearchMapLoading(false);
       updateControls();
       hideLoadingOverlay();
       setPlaceSearchStatus(error.message || "選んだ地点周辺の地図を準備できませんでした。", true);
@@ -1674,6 +1679,15 @@
     elements.placeSearchStatus.classList.toggle("is-error", isError);
   }
 
+  function setPlaceSearchMapLoading(isLoading) {
+    if (!state.placeSearchMode) return;
+    const targetLabel = state.placeSearchMode === "goal" ? "ゴール" : "スタート";
+    elements.placeSearchTitle.textContent = isLoading
+      ? `${targetLabel}の地図を取得中…`
+      : `${targetLabel}を検索`;
+    elements.placeSearchTitle.classList.toggle("is-map-loading", isLoading);
+  }
+
   function setPlaceSearchBusy(isBusy, detail = "日本国内から候補を探しています") {
     state.placeSearchBusy = isBusy;
     elements.placeSearchPanel.setAttribute("aria-busy", String(isBusy));
@@ -1697,6 +1711,7 @@
     state.placeSearchMode = mode;
     elements.placeSearchPanel.hidden = false;
     elements.placeSearchTitle.textContent = mode === "start" ? "スタートを検索" : "ゴールを検索";
+    elements.placeSearchTitle.classList.remove("is-map-loading");
     elements.placeSearchInput.value = "";
     elements.placeSearchResults.replaceChildren();
     setPlaceSearchBusy(false);
@@ -1710,6 +1725,7 @@
     if (state.geocodeController) state.geocodeController.abort();
     state.geocodeController = null;
     setPlaceSearchBusy(false);
+    setPlaceSearchMapLoading(false);
     state.placeSearchMode = null;
     elements.placeSearchPanel.hidden = true;
     elements.placeSearchResults.replaceChildren();
