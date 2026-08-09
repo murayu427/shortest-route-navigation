@@ -3,6 +3,7 @@ window.ROUTE_LAB_CONFIG = Object.freeze({
   overpassEndpoints: [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
   ],
   searchCountryCode: "jp",
   maximumRouteDistanceM: 6000,

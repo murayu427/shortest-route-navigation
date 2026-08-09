@@ -169,6 +169,8 @@
     placeSearchBusy: false,
     poiRetryPromise: null,
     lastGeocodeAt: 0,
+    overpassEndpointCursor: 0,
+    overpassEndpointCooldowns: new Map(),
     roadMemoryCache: new Map(),
     result: null,
     currentEvent: null,
@@ -957,7 +959,7 @@
     return new URL(`./.route-lab-cache/${key}.json`, window.location.href).href;
   }
 
-  async function readRoadCache(key) {
+  async function readRoadCache(key, options = {}) {
     if (state.roadMemoryCache.has(key)) return state.roadMemoryCache.get(key);
     if (!("caches" in window) || !window.isSecureContext) return null;
     try {
@@ -965,10 +967,14 @@
       const response = await cache.match(roadCacheUrl(key));
       if (!response) return null;
       const payload = await response.json();
-      if (!payload.savedAt || Date.now() - payload.savedAt > 7 * 24 * 60 * 60 * 1000) {
+      const ageMs = Date.now() - Number(payload.savedAt);
+      const freshMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
+      const staleMaxAgeMs = 30 * 24 * 60 * 60 * 1000;
+      if (!payload.savedAt || ageMs > staleMaxAgeMs) {
         await cache.delete(roadCacheUrl(key));
         return null;
       }
+      if (ageMs > freshMaxAgeMs && !options.allowStale) return null;
       state.roadMemoryCache.set(key, payload.data);
       return payload.data;
     } catch {
@@ -1095,15 +1101,27 @@
       ? CONFIG.overpassEndpoints.filter(Boolean)
       : [];
     if (endpoints.length === 0) throw new Error("道路APIが設定されていません。");
+    const now = Date.now();
+    const startIndex = state.overpassEndpointCursor % endpoints.length;
+    const rotatedEndpoints = endpoints.map(
+      (_, index) => endpoints[(startIndex + index) % endpoints.length],
+    );
+    const readyEndpoints = rotatedEndpoints.filter(
+      (endpoint) => (state.overpassEndpointCooldowns.get(endpoint) || 0) <= now,
+    );
+    const coolingEndpoints = rotatedEndpoints.filter(
+      (endpoint) => (state.overpassEndpointCooldowns.get(endpoint) || 0) > now,
+    );
+    const availableEndpoints = [...readyEndpoints, ...coolingEndpoints];
     const endpointLimit = Math.max(
       1,
-      Math.min(endpoints.length, Number(options.endpointLimit) || endpoints.length),
+      Math.min(availableEndpoints.length, Number(options.endpointLimit) || availableEndpoints.length),
     );
-    const timeoutMs = Math.max(8_000, Number(options.timeoutMs) || 32_000);
+    const timeoutMs = Math.max(8_000, Number(options.timeoutMs) || 24_000);
 
     let lastError = null;
     for (let attempt = 0; attempt < endpointLimit; attempt += 1) {
-      const endpoint = endpoints[attempt];
+      const endpoint = availableEndpoints[attempt];
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
       try {
@@ -1116,14 +1134,26 @@
           body: new URLSearchParams({ data: query }),
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error(`道路APIが応答しませんでした（${response.status}）`);
+        if (!response.ok) {
+          const responseError = new Error(`道路APIが応答しませんでした（${response.status}）`);
+          responseError.status = response.status;
+          responseError.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
+          throw responseError;
+        }
         const data = await response.json();
         if (!Array.isArray(data.elements)) throw new Error("道路APIのデータ形式が正しくありません。");
+        state.overpassEndpointCooldowns.delete(endpoint);
+        state.overpassEndpointCursor = (endpoints.indexOf(endpoint) + 1) % endpoints.length;
         return data;
       } catch (error) {
         lastError = error;
+        if (error.retryable === false) throw error;
+        const cooldownMs = error.status === 429 || error.status >= 500 ? 60_000 : 20_000;
+        state.overpassEndpointCooldowns.set(endpoint, Date.now() + cooldownMs);
         if (attempt + 1 < endpointLimit) {
-          await new Promise((resolve) => window.setTimeout(resolve, 350 * (attempt + 1)));
+          state.loadingDetail = `${options.label || "道路データ"}を別の提供元から再試行しています（${attempt + 2}/${endpointLimit}）`;
+          updatePanel();
+          await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt + 1)));
         }
       } finally {
         window.clearTimeout(timeout);
@@ -1136,10 +1166,7 @@
     try {
       state.loadingDetail = `${label}を取得しています`;
       updatePanel();
-      const requestOptions = { ...(options.requestOptions || {}) };
-      if (requestOptions.endpointLimit == null && depth < (Number(options.maxDepth) || 0)) {
-        requestOptions.endpointLimit = 1;
-      }
+      const requestOptions = { label, ...(options.requestOptions || {}) };
       return [await requestOverpass(queryBuilder(bounds), requestOptions)];
     } catch (error) {
       if (depth >= (Number(options.maxDepth) || 0)) throw error;
@@ -1197,6 +1224,11 @@
       try {
         networkParts = await fetchOverpassParts(bounds, roadNetworkQuery, "道路データ");
       } catch (error) {
+        const stale = await readRoadCache(key, { allowStale: true });
+        if (stale) {
+          showToast("最新データを取得できないため、保存済みの道路データを使用します。");
+          return stale;
+        }
         throw new Error(
           error && error.name === "AbortError"
             ? "道路データを小さな範囲に分けても取得できませんでした。通信状況を確認して再度お試しください。"
@@ -1209,9 +1241,9 @@
     let poiIncomplete = false;
     try {
       featureParts = await fetchOverpassParts(bounds, nearbyFeaturesQuery, "周辺施設データ", {
-        maxDepth: 0,
-        preSplit: false,
-        requestOptions: { timeoutMs: 12_000, endpointLimit: 1 },
+        maxDepth: 1,
+        preSplit: true,
+        requestOptions: { timeoutMs: 16_000 },
       });
     } catch {
       poiIncomplete = true;
@@ -1738,6 +1770,20 @@
     }
   }
 
+  function hasPlaceSearchDraft() {
+    return Boolean(state.searchPreview)
+      || !samePlace(state.draftStartPlace, state.startPlace)
+      || !samePlace(state.draftGoalPlace, state.goalPlace);
+  }
+
+  function activatePlaceSearch(mode) {
+    if (state.placeSearchMode === mode && !elements.placeSearchPanel.hidden) {
+      if (!state.placeSearchBusy) window.setTimeout(() => elements.placeSearchInput.focus(), 0);
+      return;
+    }
+    openPlaceSearch(mode, hasPlaceSearchDraft());
+  }
+
   function geocodeCacheKey(query) {
     const bbox = state.rawRoadData && state.rawRoadData._route_gif_metadata
       ? state.rawRoadData._route_gif_metadata.bbox
@@ -1944,7 +1990,7 @@
         elements.placeSearchResults.replaceChildren();
         setPlaceSearchStatus(
           refreshFailed
-            ? `道路は利用できますが、${label}データの取得だけ混雑のため完了しませんでした。もう一度お試しください。`
+            ? `道路は利用できますが、${label}データの取得だけ完了しませんでした。もう一度お試しください。`
             : `${origin.originLabel}周辺に${label}が見つかりませんでした。`,
           true,
         );
@@ -2213,12 +2259,10 @@
       });
     });
     elements.pickStart.addEventListener("click", () => {
-      if (state.placeSearchMode === "start") closePlaceSearch(true);
-      else openPlaceSearch("start");
+      activatePlaceSearch("start");
     });
     elements.pickGoal.addEventListener("click", () => {
-      if (state.placeSearchMode === "goal") closePlaceSearch(true);
-      else openPlaceSearch("goal");
+      activatePlaceSearch("goal");
     });
     elements.placeSearchForm.addEventListener("submit", submitPlaceSearch);
     elements.nearbyCategoryButtons.forEach((button) => {
